@@ -1,0 +1,86 @@
+#!/usr/bin/env bats
+# The break screen's terminal manners, measured on a pseudo-terminal:
+# the alternate screen, drawing once and moving only the stars, the
+# small-terminal shapes, and keys that must not leak into the phrase.
+
+setup() {
+    command -v python3 >/dev/null || skip "python3 drives the pseudo-terminal"
+    ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+    PROBE="$ROOT/tests/helpers/screen-probe.py"
+    # One known prompt and one known phrase, so the probe can look
+    # for them by name.
+    mkdir -p "$BATS_TEST_TMPDIR/prompts"
+    printf 'PROBE MESSAGE\n   PROBE-ART\n  (   )\n   ---\n' > "$BATS_TEST_TMPDIR/prompts/probe.txt"
+    printf 'probe phrase\n' > "$BATS_TEST_TMPDIR/phrases"
+    printf 'prompts = %s\nphrases = %s\n' "$BATS_TEST_TMPDIR/prompts" "$BATS_TEST_TMPDIR/phrases" > "$BATS_TEST_TMPDIR/config"
+    export MINDORO_CONFIG="$BATS_TEST_TMPDIR/config"
+    export MINDORO_STATE="$BATS_TEST_TMPDIR/no-session"
+    export PROBE_ART_TOKEN=PROBE-ART
+}
+
+# probe ROWS COLS SECONDS [KEYS...] — fills the associative array P.
+probe() {
+    declare -g -A P=()
+    local line
+    while IFS='=' read -r k v; do P[$k]=$v; done < <(python3 "$PROBE" "$@")
+    [ -n "${P[exit]:-}" ]
+}
+
+@test "full size: alternate screen, content drawn once, only the stars move" {
+    probe 40 120 2
+    [ "${P[alt_on]}" = yes ]
+    [ "${P[clears]}" = 1 ]           # the first frame; never again
+    [ "${P[frames]}" -ge 4 ]         # at 2.5 frames a second
+    [ "${P[prompt]}" = yes ]
+    [ "${P[list]}" = yes ]
+    [ "${P[art]}" = yes ]
+    [ "${P[below_rows]}" = 0 ]
+    [ "${P[past_cols]}" = 0 ]
+}
+
+@test "the phrase ends it, in any case, and the terminal is handed back" {
+    probe 40 120 4 phrase enter
+    [ "${P[exit]}" = 0 ]
+    [ "${P[alt_off]}" = yes ]
+    probe 40 120 4 'PROBE PHRASE' enter
+    [ "${P[exit]}" = 0 ]
+}
+
+@test "an arrow key is swallowed, not typed into the phrase" {
+    probe 40 120 2 up
+    [ "${P[input]}" = "" ]
+    probe 40 120 4 up phrase enter
+    [ "${P[exit]}" = 0 ]
+}
+
+@test "a wrong phrase clears the input and keeps the screen" {
+    probe 40 120 3 'not it' enter
+    [ "${P[exit]}" = running ]
+    [ "${P[input]}" = "" ]
+}
+
+@test "a short terminal drops the checklist, then the art, and never draws off-screen" {
+    probe 14 80 2
+    [ "${P[list]}" = no ]
+    [ "${P[art]}" = yes ]
+    [ "${P[prompt]}" = yes ]
+    [ "${P[below_rows]}" = 0 ]
+    probe 9 80 2
+    [ "${P[list]}" = no ]
+    [ "${P[art]}" = no ]
+    [ "${P[prompt]}" = yes ]
+    [ "${P[below_rows]}" = 0 ]
+}
+
+@test "a narrow terminal never moves the cursor past its edge" {
+    probe 20 40 2
+    [ "${P[past_cols]}" = 0 ]
+    [ "${P[prompt]}" = yes ]
+}
+
+@test "a resize between frames redraws everything once" {
+    # The probe cannot resize mid-run; the layout key covers it in
+    # code review terms: compute_layout runs every frame and a
+    # changed key forces full_frame. Guard the invariant statically.
+    grep -q 'layout_key" != "\$drawn_key' "$ROOT/libexec/mindoro-break"
+}

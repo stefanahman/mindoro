@@ -13,6 +13,14 @@
 # `phrases` file (one phrase per line), both with defaults in
 # share/mindoro/. A star field twinkles around the content; the
 # countdown of the break shows at the top while a session runs.
+#
+# Terminal manners, so it can be shipped: it runs on the alternate
+# screen and leaves the terminal as it found it; it draws the content
+# once and moves only the stars, inside synchronized-update brackets,
+# so nothing flickers; on a small terminal it drops the checklist,
+# then the art, before it would ever draw off-screen; and a key that
+# sends an escape sequence — an arrow, a function key — is swallowed
+# whole instead of leaking "[A" into what you typed.
 set -uo pipefail
 
 if (( BASH_VERSINFO[0] < 4 )); then
@@ -63,23 +71,25 @@ list_lines=(
 prompt_line="Type to close:  \"$phrase\""
 input_hint='> '
 
-# --- Static widths / heights ------------------------------------------
+# --- Static widths ----------------------------------------------------
 art_w=0
 for line in "${art_lines[@]}"; do (( ${#line} > art_w )) && art_w=${#line}; done
 list_w=0
 for line in "${list_lines[@]}"; do (( ${#line} > list_w )) && list_w=${#line}; done
-block_h=$(( ${#art_lines[@]} + 1 + 1 + 1 + 1 + 1 + ${#list_lines[@]} + 1 + 1 + 1 + 1 ))
-block_w=$art_w
-(( list_w > block_w )) && block_w=$list_w
-(( ${#msg} > block_w )) && block_w=${#msg}
-(( ${#header_line} > block_w )) && block_w=${#header_line}
-(( ${#prompt_line} > block_w )) && block_w=${#prompt_line}
 # Room on the input row so typing never meets a star.
 input_reserve=$(( ${#input_hint} + ${#phrase} + 10 ))
-(( input_reserve > block_w )) && block_w=$input_reserve
 
 typed=''
 timer_line=''
+
+# --- Colour -----------------------------------------------------------
+# 24-bit where the terminal says it can; the nearest of the 256 else.
+if [[ "${COLORTERM:-}" =~ truecolor|24bit ]]; then
+    c_short=$'\e[38;2;152;195;121m'; c_long=$'\e[38;2;97;175;239m'
+else
+    c_short=$'\e[38;5;114m'; c_long=$'\e[38;5;75m'
+fi
+c_reset=$'\e[0m'
 
 # read_timer sets timer_line to the break's countdown, or to nothing:
 # the screen also runs on its own, with no session behind it.
@@ -90,17 +100,25 @@ read_timer() {
     (( remaining < 0 )) && return 0
     local icon color
     case $phase in
-    short_break) icon=b; color='\e[38;2;152;195;121m' ;;
-    long_break)  icon=B; color='\e[38;2;97;175;239m' ;;
+    short_break) icon=b; color=$c_short ;;
+    long_break)  icon=B; color=$c_long ;;
     *) return 0 ;;
     esac
-    timer_line=$(printf '%b[%s %02d:%02d]\e[0m' "$color" "$icon" $(( remaining / 60 )) $(( remaining % 60 )))
+    timer_line=$(printf '%s[%s %02d:%02d]%s' "$color" "$icon" $(( remaining / 60 )) $(( remaining % 60 )) "$c_reset")
     return 0
 }
 
-# --- Geometry, recomputed each frame for a client that resized -------
+# --- Layout -----------------------------------------------------------
+# Recomputed every frame; a client that attaches with another size
+# gets a full redraw on the next one. Three shapes, by what fits:
+# everything; without the checklist; without the art as well. Each
+# block's top is chosen so the prompt and the input row are always on
+# screen — those two are the way out.
 lines=24; cols=80
-art_col=1; list_col=1; input_col=1; block_top=0; block_left=0; input_row=0
+show_list=1; show_art=1
+block_h=0; block_w=0; block_top=0; block_left=0
+art_col=1; list_col=1; input_col=1; input_row=0
+layout_key=''
 
 compute_layout() {
     local size
@@ -108,11 +126,33 @@ compute_layout() {
         lines=${size%% *}
         cols=${size##* }
     fi
-    art_col=$(( (cols - art_w) / 2 + 1 ));      (( art_col < 1 )) && art_col=1
-    list_col=$(( (cols - list_w) / 2 + 1 ));    (( list_col < 1 )) && list_col=1
-    input_col=$(( (cols - input_reserve) / 2 + 1 )); (( input_col < 1 )) && input_col=1
-    block_top=$(( (lines - block_h) / 2 ));     (( block_top < 0 )) && block_top=0
-    block_left=$(( (cols - block_w) / 2 ));     (( block_left < 0 )) && block_left=0
+    # Rows the whole block takes: art, blank, msg, blank, header,
+    # blank, list, blank, prompt, blank, input — plus the timer row
+    # above and a margin. The checklist goes first when that does not
+    # fit, then the art. The prompt and the input row always stay.
+    local list_rows=$(( 1 + 1 + ${#list_lines[@]} + 1 ))
+    local art_rows=$(( ${#art_lines[@]} + 1 ))
+    local need_full=$(( art_rows + 1 + 1 + list_rows + 1 + 1 + 1 + 3 ))
+    local need_no_list=$(( need_full - list_rows ))
+    show_list=1; show_art=1
+    (( lines < need_full )) && show_list=0
+    (( lines < need_no_list )) && show_art=0
+    block_h=$(( 1 + 1 + 1 + 1 ))                       # msg, blank, prompt, blank, (input follows)
+    (( show_art )) && block_h=$(( block_h + ${#art_lines[@]} + 1 ))
+    (( show_list )) && block_h=$(( block_h + 1 + 1 + ${#list_lines[@]} + 1 ))
+    block_w=${#msg}
+    (( show_art && art_w > block_w )) && block_w=$art_w
+    (( show_list && list_w > block_w )) && block_w=$list_w
+    (( show_list && ${#header_line} > block_w )) && block_w=${#header_line}
+    (( ${#prompt_line} > block_w )) && block_w=${#prompt_line}
+    (( input_reserve > block_w )) && block_w=$input_reserve
+
+    art_col=$(( (cols - art_w) / 2 + 1 ));            (( art_col < 1 )) && art_col=1
+    list_col=$(( (cols - list_w) / 2 + 1 ));          (( list_col < 1 )) && list_col=1
+    input_col=$(( (cols - input_reserve) / 2 + 1 ));  (( input_col < 1 )) && input_col=1
+    block_top=$(( (lines - block_h - 1) / 2 ));       (( block_top < 2 )) && block_top=2
+    block_left=$(( (cols - block_w) / 2 ));           (( block_left < 0 )) && block_left=0
+    layout_key="$lines:$cols:$show_art:$show_list"
     return 0
 }
 
@@ -122,6 +162,10 @@ move() { printf '\e[%d;%dH' "$1" "$2"; }
 hide_cursor() { esc '?25l'; }
 show_cursor() { esc '?25h'; }
 clear_screen() { esc '2J'; esc 'H'; }
+alt_screen_on()  { esc '?1049h'; }
+alt_screen_off() { esc '?1049l'; }
+sync_begin() { esc '?2026h'; }
+sync_end()   { esc '?2026l'; }
 
 draw_center_line() {
     local text=$1 row=$2 col
@@ -131,25 +175,35 @@ draw_center_line() {
     printf '%s' "$text"
 }
 
+draw_timer() {
+    # "[X 00:00]" is nine cells wide; the colour codes are not.
+    move 1 $(( (cols - 9) / 2 + 1 ))
+    if [[ -n "$timer_line" ]]; then printf '%s' "$timer_line"; else printf '%9s' ''; fi
+}
+
+# draw_content draws the fixed part once per layout: art, message,
+# checklist, prompt. It sets input_row for draw_input.
 draw_content() {
     local row line
-    if [[ -n "$timer_line" ]]; then
-        # "[X 00:00]" is nine cells wide; the colour codes are not.
-        move 2 $(( (cols - 9) / 2 + 1 ))
-        printf '%b' "$timer_line"
-    fi
     row=$block_top
-    for line in "${art_lines[@]}"; do
-        row=$(( row + 1 )); move "$row" "$art_col"; printf '%s' "$line"
-    done
-    row=$(( row + 2 )); draw_center_line "$msg" "$row"
-    row=$(( row + 2 )); draw_center_line "$header_line" "$row"
-    row=$(( row + 1 ))
-    for line in "${list_lines[@]}"; do
-        row=$(( row + 1 )); move "$row" "$list_col"; printf '%s' "$line"
-    done
+    if (( show_art )); then
+        for line in "${art_lines[@]}"; do
+            row=$(( row + 1 )); move "$row" "$art_col"; printf '%s' "$line"
+        done
+        row=$(( row + 1 ))
+    fi
+    row=$(( row + 1 )); draw_center_line "$msg" "$row"
+    if (( show_list )); then
+        row=$(( row + 2 )); draw_center_line "$header_line" "$row"
+        row=$(( row + 1 ))
+        for line in "${list_lines[@]}"; do
+            row=$(( row + 1 )); move "$row" "$list_col"; printf '%s' "$line"
+        done
+        row=$(( row + 1 ))
+    fi
     row=$(( row + 2 )); draw_center_line "$prompt_line" "$row"
     input_row=$(( row + 2 ))
+    (( input_row > lines )) && input_row=$lines
 }
 
 draw_input() {
@@ -160,12 +214,28 @@ draw_input() {
 }
 
 # --- Star field -------------------------------------------------------
+# Stars live outside the content block. Each frame erases last frame's
+# stars and places new ones; the content underneath is never touched,
+# so nothing else has to be redrawn.
 star_chars=('.' ',' "'" '`' '*' '.' '.' '.')
+declare -a star_rows=() star_cols=()
+
 in_block_region() {
     local r=$1 c=$2
-    (( r >= block_top && r < block_top + block_h )) || return 1
+    (( r == 1 )) && return 0                                  # the timer row
+    (( r == input_row )) && return 0                          # the input row
+    (( r >= block_top && r < block_top + block_h + 2 )) || return 1
     (( c >= block_left - 2 && c < block_left + block_w + 2 )) || return 1
     return 0
+}
+
+erase_stars() {
+    local i
+    for (( i = 0; i < ${#star_rows[@]}; i++ )); do
+        move "${star_rows[$i]}" "${star_cols[$i]}"
+        printf ' '
+    done
+    star_rows=(); star_cols=()
 }
 
 draw_stars() {
@@ -177,28 +247,9 @@ draw_stars() {
         ch=${star_chars[$(( RANDOM % ${#star_chars[@]} ))]}
         move "$row" "$col"
         printf '%s' "$ch"
+        star_rows+=("$row"); star_cols+=("$col")
     done
 }
-
-# --- Main loop --------------------------------------------------------
-cleanup() {
-    show_cursor
-    clear_screen
-    stty sane 2>/dev/null || true
-}
-trap cleanup EXIT
-trap 'exit 0' INT TERM HUP
-hide_cursor
-# Non-canonical, no-echo, for the whole loop: bash's `read -n 1`
-# toggles the same termios bits per call, and pre-setting them closes
-# the gap between calls where a keystroke could land in a line buffer.
-stty -icanon -echo min 1 time 0 2>/dev/null || true
-
-compute_layout
-read_timer
-clear_screen
-draw_content
-draw_input
 
 density() {
     local d=$(( (lines * cols) / 400 ))
@@ -207,6 +258,44 @@ density() {
     echo "$d"
 }
 
+# --- Main loop --------------------------------------------------------
+cleanup() {
+    show_cursor
+    alt_screen_off
+    stty sane 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+alt_screen_on
+hide_cursor
+# Non-canonical, no-echo, for the whole loop: bash's `read -n 1`
+# toggles the same termios bits per call, and pre-setting them closes
+# the gap between calls where a keystroke could land in a line buffer.
+stty -icanon -echo min 1 time 0 2>/dev/null || true
+
+# full_frame draws everything from a clear screen: the first frame,
+# and any frame after the terminal changed size.
+full_frame() {
+    clear_screen
+    star_rows=(); star_cols=()
+    draw_content
+    draw_timer
+    draw_stars "$(density)"
+    draw_input
+}
+
+# drain_escape swallows the rest of an escape sequence — the bytes
+# that follow ESC within a few milliseconds — so an arrow key is one
+# ignored key, not a "[A" in the phrase.
+drain_escape() {
+    local _
+    while IFS= read -t 0.02 -n 1 -s -r -d '' _; do :; done
+}
+
+compute_layout
+read_timer
+sync_begin; full_frame; sync_end
+drawn_key=$layout_key
 target=${phrase,,}
 
 while true; do
@@ -218,14 +307,22 @@ while true; do
             [[ "${typed,,}" == "$target" ]] && break
             typed=''
             ;;
+        $'\e') drain_escape ;;
         $'\x7f' | $'\b') typed=${typed%?} ;;
         [[:print:]]) typed+=$ch ;;
         esac
     fi
     compute_layout
     read_timer
-    clear_screen
-    draw_content
-    draw_stars "$(density)"
-    draw_input
+    sync_begin
+    if [[ "$layout_key" != "$drawn_key" ]]; then
+        full_frame
+        drawn_key=$layout_key
+    else
+        erase_stars
+        draw_stars "$(density)"
+        draw_timer
+        draw_input
+    fi
+    sync_end
 done

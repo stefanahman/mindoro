@@ -31,6 +31,14 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
   `adapters/` only.
 - The break screen never calls a multiplexer. What happens when it
   exits is the adapter's business.
+- The break screen has terminal manners, and `tests/screen.bats`
+  measures them on a pseudo-terminal: it runs on the alternate screen
+  and hands the terminal back; it draws the content once and moves
+  only the stars, inside synchronized-update brackets; below 19–21
+  rows it drops the checklist, then the art, and never draws
+  off-screen; an escape sequence from a key is swallowed whole. The
+  probe waits for the first frame before typing — keys on a fixed
+  clock can all be queued before the first read on a slow machine.
 - Phases run on the wall clock. Sleep is a gap between ticks, and the
   rule is in `daemon_transition`: a break that ended during the gap is
   over; a focus that ended during the gap voids the session.
