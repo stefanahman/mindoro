@@ -54,6 +54,7 @@ Usage:
   mindoro status [--tmux]  the phase and time left, or nothing
   mindoro break            the break screen, in this terminal
   mindoro daemon           the clock, in the foreground
+  mindoro tmux-init        wire tmux: #{mindoro} in the status line, prefix+P
 
 `start 40` is a 40-minute focus; `--focus 40` says the same. The
 breaks and the cycle count follow the config unless given too. A
@@ -195,6 +196,32 @@ cmd_daemon() {
     daemon_run
 }
 
+# tmux-init wires tmux: `#{mindoro}` in the status line becomes a call
+# to `mindoro status --tmux`, and a key toggles a session. Run from
+# tmux.conf (`run-shell 'mindoro tmux-init'`) or by TPM through
+# mindoro.tmux. The interpolation writes the resolved path of this
+# launcher, so it survives a PATH tmux's shell does not have.
+#
+#   set -g @mindoro-key 'P'     # prefix+P toggles; default P, "" for none
+cmd_tmux_init() {
+    command -v tmux >/dev/null || { echo "mindoro: tmux-init: tmux is not on PATH" >&2; return 1; }
+    local self="$MINDORO_HOME/bin/mindoro" option value key
+    for option in status-right status-left; do
+        value=$(tmux show-option -gqv "$option")
+        [[ "$value" == *'#{mindoro}'* ]] || continue
+        tmux set-option -gq "$option" "${value//\#\{mindoro\}/#($self status --tmux)}"
+    done
+    # Unset means P; set to "" means no binding. `-v` cannot tell those
+    # apart, so read the option with its name first.
+    if [[ -z "$(tmux show-option -gq @mindoro-key)" ]]; then
+        key=P
+    else
+        key=$(tmux show-option -gqv @mindoro-key)
+    fi
+    [[ -n "$key" ]] && tmux bind-key "$key" run-shell "\"$self\" toggle"
+    return 0
+}
+
 case ${1:-} in
 start)  shift; cmd_start "$@" ;;
 stop)   shift; cmd_stop "$@" ;;
@@ -202,6 +229,7 @@ toggle) shift; cmd_toggle "$@" ;;
 status) shift; cmd_status "$@" ;;
 break)  shift; cmd_break "$@" ;;
 daemon) shift; cmd_daemon "$@" ;;
+tmux-init) shift; cmd_tmux_init "$@" ;;
 -h | --help | help | '') usage ;;
 --version) cat "$MINDORO_HOME/VERSION" ;;
 *)

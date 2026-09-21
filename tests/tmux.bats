@@ -95,7 +95,7 @@ wait_for() {
 
 @test "the status line shows the countdown through #{mindoro}" {
     "${T[@]}" set-option -g status-right '#{mindoro}'
-    "${T[@]}" run-shell "$ROOT/tmux/mindoro.tmux"
+    "${T[@]}" run-shell "$ROOT/mindoro.tmux"      # the TPM entry, which runs `mindoro tmux-init`
     local right
     right=$("${T[@]}" show-option -gv status-right)
     [[ "$right" == *'status --tmux'* ]]

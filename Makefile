@@ -4,7 +4,7 @@ LIB    ?= $(PREFIX)/lib/mindoro
 LIBEXEC ?= $(PREFIX)/libexec/mindoro
 SHARE  ?= $(PREFIX)/share/mindoro
 
-SCRIPTS = bin/mindoro libexec/mindoro-break adapters/tmux
+SCRIPTS = bin/mindoro libexec/mindoro-break adapters/tmux mindoro.tmux
 LIBS    = $(wildcard lib/mindoro/*.sh)
 
 .PHONY: lint test check install uninstall
@@ -12,7 +12,7 @@ LIBS    = $(wildcard lib/mindoro/*.sh)
 # -x follows the `# shellcheck source=` directives into lib/, so the
 # entry points are checked with their libraries as one program.
 lint:
-	shellcheck -x -s bash $(SCRIPTS) tmux/mindoro.tmux
+	shellcheck -x -s bash $(SCRIPTS)
 
 test:
 	bats tests

@@ -20,8 +20,10 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
   file and does the showing and the takeover for its multiplexer.
 - `share/mindoro/` — default phrases and prompts, overridable through
   the config.
-- `tmux/mindoro.tmux` — the TPM entry: `#{mindoro}` in the status
-  line and the toggle key.
+- `mindoro tmux-init` — wires tmux: `#{mindoro}` in the status line
+  and the toggle key. `mindoro.tmux` at the root is the TPM entry and
+  only calls it; a brew install runs it from tmux.conf. TPM runs
+  `*.tmux` files at a plugin's root and nowhere else.
 
 ## Invariants
 

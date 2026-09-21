@@ -34,26 +34,40 @@ The timer is the delivery mechanism. The break is the product.
 
 ## Install
 
-Needs bash 4 or newer. macOS ships 3.2; `brew install bash` puts a
-current one on your PATH.
+**Homebrew**, for any multiplexer:
 
-**tmux**, through [TPM](https://github.com/tmux-plugins/tpm):
+```sh
+brew install stefanahman/tap/mindoro
+```
+
+Then, for tmux, two lines in `tmux.conf`:
+
+```tmux
+set -g status-right '#{mindoro} %H:%M'
+run-shell 'mindoro tmux-init'
+```
+
+**tmux through [TPM](https://github.com/tmux-plugins/tpm)** instead,
+with no Homebrew:
 
 ```tmux
 set -g @plugin 'stefanahman/mindoro'
 set -g status-right '#{mindoro} %H:%M'
-set -g status-interval 2
 ```
 
-`prefix + P` starts and stops a session. Set `@mindoro-key` to
-change the key, or to `""` for none.
+Either way `prefix + P` starts and stops a session; set
+`@mindoro-key` to change the key, or to `""` for none. A
+`status-interval` of 1 or 2 makes the countdown live.
 
-**From a checkout**, for any multiplexer:
+**From a checkout**:
 
 ```sh
 git clone https://github.com/stefanahman/mindoro
 cd mindoro && make install BIN=~/.local/bin
 ```
+
+Needs bash 4 or newer. macOS ships 3.2; the formula depends on
+Homebrew's, and a checkout finds one on your PATH.
 
 ## Use
 
