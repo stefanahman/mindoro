@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# mindoro — a break you can't click away.
+#
+# A pomodoro timer for the terminal whose breaks take over every window
+# and only let go when you type the phrase. The timer is the delivery
+# mechanism; the break is the product.
+#
+# Usage:
+#   mindoro start            begin a focus (starts the daemon)
+#   mindoro stop             end the session (stops the daemon)
+#   mindoro toggle           start if stopped, stop if running
+#   mindoro status [--tmux]  the phase and time left, or nothing
+#   mindoro break            the break screen, in this terminal
+#   mindoro daemon           the clock, in the foreground
+#
+# The daemon owns time. It ticks once a second, advances phases on the
+# wall clock, and writes the state file every tick. Everything else —
+# a status bar, a sidebar pill, the break takeover — reads that file.
+# Adapters for each multiplexer run as the daemon's children and are
+# found in adapters/ next to this script's lib/.
+set -uo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "mindoro: bash 4 or newer is required (this is $BASH_VERSION)" >&2
+    echo "mindoro: on macOS, brew install bash and make sure it is first on PATH" >&2
+    exit 1
+fi
+
+# Resolve the real location of this script so lib/ and share/ are
+# found through a symlink (a checkout's `make install BIN=...` links).
+_self=${BASH_SOURCE[0]}
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case $_link in
+    /*) _self=$_link ;;
+    *) _self=$(dirname "$_self")/$_link ;;
+    esac
+done
+MINDORO_HOME=$(cd "$(dirname "$_self")/.." && pwd -P)
+export MINDORO_HOME
+unset _self _link
+
+# shellcheck source=../lib/mindoro/config.sh
+source "$MINDORO_HOME/lib/mindoro/config.sh"
+# shellcheck source=../lib/mindoro/state.sh
+source "$MINDORO_HOME/lib/mindoro/state.sh"
+# shellcheck source=../lib/mindoro/notify.sh
+source "$MINDORO_HOME/lib/mindoro/notify.sh"
+# shellcheck source=../lib/mindoro/daemon.sh
+source "$MINDORO_HOME/lib/mindoro/daemon.sh"
+
+usage() {
+    sed -n '2,15p' "$MINDORO_HOME/bin/mindoro" | sed 's/^# \{0,1\}//'
+}
+
+cmd_start() {
+    config_load || return $?
+    if state_daemon_alive; then
+        echo "mindoro: already running ($(state_describe))" >&2
+        return 0
+    fi
+    state_begin focus
+    daemon_spawn
+    # Return once the daemon has claimed the state — its pid in the
+    # file — so a `start` that returns is a clock that is ticking, and
+    # a second `start` or a `toggle` a moment later sees it.
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        state_daemon_alive && break
+        sleep 0.1
+    done
+    if ! state_daemon_alive; then
+        echo "mindoro: the daemon did not start; see $MINDORO_LOG" >&2
+        state_clear
+        return 1
+    fi
+    echo "mindoro: focus $(( cfg_focus )) min"
+}
+
+cmd_stop() {
+    if ! state_daemon_alive; then
+        state_clear
+        echo "mindoro: not running"
+        return 0
+    fi
+    local pid
+    pid=$(state_get pid)
+    kill -TERM "$pid" 2>/dev/null || true
+    # The daemon clears the state on its way out; wait for it briefly
+    # so `stop` followed by `status` reads a settled file system.
+    local _
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        state_exists || break
+        sleep 0.1
+    done
+    state_clear
+    echo "mindoro: stopped"
+}
+
+cmd_toggle() {
+    if state_daemon_alive; then cmd_stop; else cmd_start; fi
+}
+
+cmd_status() {
+    local format=plain
+    case ${1:-} in
+    --tmux) format=tmux ;;
+    '') ;;
+    *) echo "mindoro: status: unknown flag $1" >&2; return 64 ;;
+    esac
+    state_load || return 0
+    state_fresh || return 0
+    local remaining
+    remaining=$(( ends - $(date +%s) ))
+    (( remaining < 0 )) && remaining=0
+    local icon color
+    case $phase in
+    focus)       icon=F; color='#e2b072' ;;
+    short_break) icon=b; color='#98c379' ;;
+    long_break)  icon=B; color='#61afef' ;;
+    esac
+    local clock
+    clock=$(printf '%02d:%02d' $(( remaining / 60 )) $(( remaining % 60 )))
+    case $format in
+    plain) printf '%s %s\n' "${phase/_/ }" "$clock" ;;
+    tmux)  printf '#[fg=%s][%s %s]#[default]' "$color" "$icon" "$clock" ;;
+    esac
+}
+
+cmd_break() {
+    exec "$MINDORO_HOME/libexec/mindoro-break"
+}
+
+cmd_daemon() {
+    config_load || return $?
+    daemon_run
+}
+
+case ${1:-} in
+start)  shift; cmd_start "$@" ;;
+stop)   shift; cmd_stop "$@" ;;
+toggle) shift; cmd_toggle "$@" ;;
+status) shift; cmd_status "$@" ;;
+break)  shift; cmd_break "$@" ;;
+daemon) shift; cmd_daemon "$@" ;;
+-h | --help | help | '') usage ;;
+--version) cat "$MINDORO_HOME/VERSION" ;;
+*)
+    echo "mindoro: unknown command: $1" >&2
+    usage >&2
+    exit 64
+    ;;
+esac

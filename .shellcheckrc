@@ -1,0 +1,3 @@
+# `# shellcheck source=` directives are relative to the script that
+# carries them, so bin/mindoro can name ../lib/mindoro/*.sh.
+source-path=SCRIPTDIR
