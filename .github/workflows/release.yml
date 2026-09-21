@@ -1,0 +1,56 @@
+# On a v* tag: a release with the tarball as its asset, and the formula
+# in stefanahman/homebrew-tap bumped to it. The shell tool's answer to
+# what GoReleaser does for the Go ones — same trigger, same tap token.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the tarball, and its sha256
+        id: build
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          git archive --format=tar.gz --prefix="mindoro-$v/" -o "mindoro-$v.tar.gz" "$GITHUB_REF_NAME"
+          sha=$(sha256sum "mindoro-$v.tar.gz" | cut -d' ' -f1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${{ steps.build.outputs.version }}
+          if gh release view "v$v" >/dev/null 2>&1; then
+            gh release upload "v$v" "mindoro-$v.tar.gz" --clobber
+          else
+            gh release create "v$v" "mindoro-$v.tar.gz" --title "v$v" --generate-notes
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: stefanahman/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: the formula
+        run: |
+          v=${{ steps.build.outputs.version }}
+          sha=${{ steps.build.outputs.sha }}
+          f=tap/Formula/mindoro.rb
+          sed -i -E \
+            -e "s|^  url \".*\"|  url \"https://github.com/${GITHUB_REPOSITORY}/releases/download/v$v/mindoro-$v.tar.gz\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" "$f"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "mindoro $v" && git push
