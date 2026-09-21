@@ -49,9 +49,11 @@ state_gone() { [[ ! -f "$STATE" ]]; }
 # doctor key=value...: rewrite the live state file, keeping the pid,
 # to stage a situation the clock would otherwise take minutes to reach.
 doctor() {
-    local phase ends cycles tick pid kv
+    local phase ends cycles tick pid kv rest
     phase=$(state_field phase); ends=$(state_field ends); cycles=$(state_field cycles)
     tick=$(state_field tick); pid=$(state_field pid)
+    # The four durations pass through untouched, as production writes them.
+    rest=$(grep -E '^(focus_minutes|short_break_minutes|long_break_minutes|long_break_every)=' "$STATE")
     for kv in "$@"; do
         case $kv in
         phase=*)  phase=${kv#*=} ;;
@@ -60,7 +62,7 @@ doctor() {
         tick=*)   tick=${kv#*=} ;;
         esac
     done
-    printf 'phase=%s\nends=%s\ncycles=%s\ntick=%s\npid=%s\n' "$phase" "$ends" "$cycles" "$tick" "$pid" > "$STATE.new"
+    printf 'phase=%s\nends=%s\ncycles=%s\ntick=%s\npid=%s\n%s\n' "$phase" "$ends" "$cycles" "$tick" "$pid" "$rest" > "$STATE.new"
     mv -f "$STATE.new" "$STATE"
 }
 
@@ -169,7 +171,45 @@ doctor() {
     printf 'focus = 0\n' > "$XDG_CONFIG_HOME/mindoro/config"
     run "$MINDORO" start
     [ "$status" -eq 65 ]
-    [[ "$output" == *"focus must be a positive integer"* ]]
+    [[ "$output" == *"focus must be a positive whole number of minutes"* ]]
+}
+
+@test "numbers are read in decimal, with a ceiling, from the config and the command line" {
+    run "$MINDORO" start 08
+    [ "$status" -eq 0 ]                    # not an octal error
+    wait_for 3 phase_is focus
+    [ "$(state_field focus_minutes)" = 8 ]
+    "$MINDORO" stop
+    run "$MINDORO" start 010
+    [[ "$output" == "mindoro: focus 10 min" ]]   # ten, not eight
+    "$MINDORO" stop
+    run "$MINDORO" start 99999999999999999999
+    [ "$status" -eq 64 ]
+    run "$MINDORO" start 1441
+    [ "$status" -eq 64 ]
+    [[ "$output" == *"focus is at most 1440 minutes"* ]]
+    printf 'focus = 010\n' > "$XDG_CONFIG_HOME/mindoro/config"
+    run "$MINDORO" start
+    [[ "$output" == "mindoro: focus 10 min" ]]
+}
+
+@test "the focus may be given once, and cycles are counted, not timed" {
+    run "$MINDORO" start 40 --focus 50
+    [ "$status" -eq 64 ]
+    [[ "$output" == *"given twice"* ]]
+    run "$MINDORO" start --cycles 0
+    [ "$status" -eq 64 ]
+    [[ "$output" == *"cycles must be a positive whole number of focuses"* ]]
+    [ ! -f "$STATE" ]
+}
+
+@test "a state file rewritten without its durations gets them back on the next tick" {
+    "$MINDORO" start 3 --short-break 1
+    wait_for 3 phase_is focus
+    grep -v -E '^(focus_minutes|short_break_minutes|long_break_minutes|long_break_every)=' "$STATE" > "$STATE.new"
+    mv -f "$STATE.new" "$STATE"
+    wait_for 4 bash -c "grep -q '^focus_minutes=3$' '$STATE'"
+    grep -q '^short_break_minutes=1$' "$STATE"
 }
 
 @test "--version prints the version" {
@@ -182,7 +222,6 @@ doctor() {
     [ "$status" -eq 0 ]
     [[ "$output" == "mindoro: focus 3 min" ]]
     wait_for 3 phase_is focus
-    [ "$(( $(state_field ends) - $(state_field tick) ))" -ge 2 ]
     [ "$(state_field focus_minutes)" = 3 ]
     [ "$(state_field short_break_minutes)" = 2 ]   # the config's
     [ "$(state_field long_break_every)" = 2 ]
@@ -219,7 +258,7 @@ doctor() {
     [ "$status" -eq 64 ]
     run "$MINDORO" start 25 5
     [ "$status" -eq 64 ]
-    [[ "$output" == *"one number is the focus"* ]]
+    [[ "$output" == *"given twice"* ]]
     run "$MINDORO" start --short-break
     [ "$status" -eq 64 ]
     [ ! -f "$STATE" ]

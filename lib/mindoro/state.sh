@@ -75,7 +75,11 @@ state_get() {
     return 1
 }
 
-# state_write puts phase, ends, cycles, tick, pid on disk, atomically.
+# state_write puts the session on disk, atomically: phase, ends,
+# cycles, tick, pid, and the four durations. The durations written are
+# the ones in force (cfg_*), never the ones last read back from the
+# file — so a file rewritten without them gets them back on the next
+# tick instead of losing them for the rest of the session.
 state_write() {
     local dir tmp
     dir=$(dirname "$MINDORO_STATE")
@@ -84,7 +88,7 @@ state_write() {
     printf 'phase=%s\nends=%s\ncycles=%s\ntick=%s\npid=%s\n' \
         "$phase" "$ends" "$cycles" "$tick" "$pid" > "$tmp"
     printf 'focus_minutes=%s\nshort_break_minutes=%s\nlong_break_minutes=%s\nlong_break_every=%s\n' \
-        "$focus_minutes" "$short_break_minutes" "$long_break_minutes" "$long_break_every" >> "$tmp"
+        "$cfg_focus" "$cfg_short_break" "$cfg_long_break" "$cfg_cycles" >> "$tmp"
     mv -f "$tmp" "$MINDORO_STATE"
 }
 
@@ -99,10 +103,6 @@ state_begin() {
     ends=$(( tick + $(config_duration "$phase") ))
     cycles=0
     pid=''
-    focus_minutes=$cfg_focus
-    short_break_minutes=$cfg_short_break
-    long_break_minutes=$cfg_long_break
-    long_break_every=$cfg_cycles
     state_write
 }
 

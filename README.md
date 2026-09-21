@@ -60,7 +60,7 @@ cd mindoro && make install BIN=~/.local/bin
 ```
 mindoro start [MINUTES]  begin a focus
 mindoro stop             end the session
-mindoro toggle           one key for both
+mindoro toggle [MINUTES] one key for both; the minutes apply when it starts
 mindoro status [--tmux]  the phase and time left, or nothing
 mindoro break            the break screen, in this terminal
 ```
@@ -74,9 +74,14 @@ config alone:
 
 ```sh
 mindoro start 40                              # a 40-minute focus
+mindoro start --focus 40                      # the same, spelled out
 mindoro start 50 --short-break 10             # and 10-minute breaks
 mindoro start --long-break 30 --cycles 3      # a long one after every third
 ```
+
+Numbers are read in decimal (`010` is ten), and each has a ceiling —
+1440 minutes, 100 cycles — past which it is refused rather than
+wrapped.
 
 A session's minutes are fixed when it starts. To change them, stop
 and start again; `start 40` against a running session says so and

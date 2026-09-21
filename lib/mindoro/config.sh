@@ -40,10 +40,8 @@ config_load() {
         value=${BASH_REMATCH[2]}
         case $key in
         focus | short_break | long_break | cycles | wake_gap)
-            if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value == 0 )); then
-                echo "mindoro: $MINDORO_CONFIG:$n: $key must be a positive integer" >&2
-                return 65
-            fi
+            config_int "$key" "$value" "$MINDORO_CONFIG:$n" || return 65
+            value=$int_value
             ;;
         phrases | prompts)
             value=${value/#\~/$HOME}
@@ -55,6 +53,31 @@ config_load() {
         esac
         printf -v "cfg_$key" '%s' "$value"
     done < "$MINDORO_CONFIG"
+}
+
+# config_int <key> <value> <where> — the one check for every number
+# mindoro accepts, from the config or the command line. Sets int_value
+# to the number in decimal: `010` is ten, not octal eight, and `08` is
+# not an error. A digit string is matched, then read in base 10 with a
+# length cap, so a 20-digit value cannot wrap in arithmetic. Each key
+# has a ceiling a person would never mean to cross.
+config_int() {
+    local key=$1 value=$2 where=$3 max what
+    case $key in
+    focus | short_break | long_break) max=1440; what='minutes' ;;
+    cycles)   max=100;  what='focuses' ;;
+    wake_gap) max=3600; what='seconds' ;;
+    *) echo "mindoro: $where: $key is not a number setting" >&2; return 1 ;;
+    esac
+    if [[ ! "$value" =~ ^[0-9]{1,6}$ ]] || (( 10#$value == 0 )); then
+        echo "mindoro: $where: $key must be a positive whole number of $what" >&2
+        return 1
+    fi
+    int_value=$(( 10#$value ))
+    if (( int_value > max )); then
+        echo "mindoro: $where: $key is at most $max $what" >&2
+        return 1
+    fi
 }
 
 # Seconds for a phase's duration, from the minutes in the config.
