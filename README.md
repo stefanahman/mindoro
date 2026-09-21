@@ -58,7 +58,7 @@ cd mindoro && make install BIN=~/.local/bin
 ## Use
 
 ```
-mindoro start            begin a focus
+mindoro start [MINUTES]  begin a focus
 mindoro stop             end the session
 mindoro toggle           one key for both
 mindoro status [--tmux]  the phase and time left, or nothing
@@ -68,6 +68,19 @@ mindoro break            the break screen, in this terminal
 A session is 25 minutes of focus, then a 5-minute break, and a
 20-minute break after every fourth focus. Each phase change sends a
 notification through your multiplexer's notifier, or the desktop's.
+
+Minutes on the command line are for that session only and leave the
+config alone:
+
+```sh
+mindoro start 40                              # a 40-minute focus
+mindoro start 50 --short-break 10             # and 10-minute breaks
+mindoro start --long-break 30 --cycles 3      # a long one after every third
+```
+
+A session's minutes are fixed when it starts. To change them, stop
+and start again; `start 40` against a running session says so and
+changes nothing.
 
 ## How it works
 
@@ -122,7 +135,14 @@ ends=<unix time the phase expires>
 cycles=<focuses completed this session>
 tick=<unix time of the daemon's last tick>
 pid=<the daemon>
+focus_minutes=<this session's focus length>
+short_break_minutes=<its short break>
+long_break_minutes=<its long break>
+long_break_every=<focuses per long break>
 ```
+
+The four durations are the session's, fixed at `start`, so a reader
+can show "40/10" without knowing the config.
 
 A `tick` older than a few seconds is a daemon that has stopped
 ticking — asleep or gone — and readers treat the file as no session.

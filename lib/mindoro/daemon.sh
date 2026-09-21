@@ -33,6 +33,9 @@ daemon_log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
 daemon_run() {
     state_load || { echo "mindoro: daemon: no session to run (use start)" >&2; return 1; }
+    # The session's minutes come from the file `start` wrote, not from
+    # the config as it is now.
+    state_durations_apply
     pid=$$
     tick=$(now_epoch)
     state_write

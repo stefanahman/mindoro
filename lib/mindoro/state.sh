@@ -8,6 +8,14 @@
 #   cycles=<focuses completed; a long break follows every N of them>
 #   tick=<unix time of the daemon's last tick>
 #   pid=<the daemon's pid>
+#   focus_minutes=<this session's focus length>
+#   short_break_minutes=<and its short break>
+#   long_break_minutes=<and its long break>
+#   long_break_every=<focuses per long break>
+#
+# The four durations are the session's, fixed at `start` from the
+# config and the command line, so a reader can show "40/10" and the
+# daemon never re-reads the config mid-session.
 #
 # This is the public, read-only interface. Adapters, status bars and
 # anything else that wants to know read it and never write it. Writes
@@ -24,10 +32,11 @@ STATE_STALE_AFTER=5
 
 state_exists() { [[ -f "$MINDORO_STATE" ]]; }
 
-# state_load reads the file into phase, ends, cycles, tick, pid.
-# Returns 1 when there is no session.
+# state_load reads the file into phase, ends, cycles, tick, pid and
+# the session's four durations. Returns 1 when there is no session.
 state_load() {
     phase='' ends=0 cycles=0 tick=0 pid=0
+    focus_minutes='' short_break_minutes='' long_break_minutes='' long_break_every=''
     [[ -f "$MINDORO_STATE" ]] || return 1
     local key value
     while IFS='=' read -r key value; do
@@ -37,9 +46,24 @@ state_load() {
         cycles) cycles=$value ;;
         tick)   tick=$value ;;
         pid)    pid=$value ;;
+        focus_minutes)       focus_minutes=$value ;;
+        short_break_minutes) short_break_minutes=$value ;;
+        long_break_minutes)  long_break_minutes=$value ;;
+        long_break_every)    long_break_every=$value ;;
         esac
     done < "$MINDORO_STATE"
     [[ -n "$phase" ]] || return 1
+}
+
+# state_durations_apply makes the session's durations the ones in
+# force — cfg_* — so config_duration answers for this session, not
+# for whatever the config says today.
+state_durations_apply() {
+    [[ -n "$focus_minutes" ]] && cfg_focus=$focus_minutes
+    [[ -n "$short_break_minutes" ]] && cfg_short_break=$short_break_minutes
+    [[ -n "$long_break_minutes" ]] && cfg_long_break=$long_break_minutes
+    [[ -n "$long_break_every" ]] && cfg_cycles=$long_break_every
+    return 0
 }
 
 state_get() {
@@ -59,6 +83,8 @@ state_write() {
     tmp=$(mktemp "$dir/.state.XXXXXX") || return 1
     printf 'phase=%s\nends=%s\ncycles=%s\ntick=%s\npid=%s\n' \
         "$phase" "$ends" "$cycles" "$tick" "$pid" > "$tmp"
+    printf 'focus_minutes=%s\nshort_break_minutes=%s\nlong_break_minutes=%s\nlong_break_every=%s\n' \
+        "$focus_minutes" "$short_break_minutes" "$long_break_minutes" "$long_break_every" >> "$tmp"
     mv -f "$tmp" "$MINDORO_STATE"
 }
 
@@ -73,6 +99,10 @@ state_begin() {
     ends=$(( tick + $(config_duration "$phase") ))
     cycles=0
     pid=''
+    focus_minutes=$cfg_focus
+    short_break_minutes=$cfg_short_break
+    long_break_minutes=$cfg_long_break
+    long_break_every=$cfg_cycles
     state_write
 }
 

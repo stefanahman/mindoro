@@ -176,3 +176,51 @@ doctor() {
     run "$MINDORO" --version
     [[ "$output" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
+
+@test "start N sets this session's focus and records the minutes in the state" {
+    run "$MINDORO" start 3
+    [ "$status" -eq 0 ]
+    [[ "$output" == "mindoro: focus 3 min" ]]
+    wait_for 3 phase_is focus
+    [ "$(( $(state_field ends) - $(state_field tick) ))" -ge 2 ]
+    [ "$(state_field focus_minutes)" = 3 ]
+    [ "$(state_field short_break_minutes)" = 2 ]   # the config's
+    [ "$(state_field long_break_every)" = 2 ]
+}
+
+@test "start flags override each duration, and the daemon uses them" {
+    "$MINDORO" start 1 --short-break 1 --long-break 1 --cycles 1
+    wait_for 3 phase_is focus
+    [ "$(state_field long_break_every)" = 1 ]
+    # cycles=1: the first break is already the long one.
+    wait_for 4 phase_is long_break
+    wait_for 4 phase_is focus
+}
+
+@test "toggle passes the minutes through to start" {
+    "$MINDORO" toggle 4
+    wait_for 3 phase_is focus
+    [ "$(state_field focus_minutes)" = 4 ]
+}
+
+@test "start refuses new minutes while a session runs" {
+    "$MINDORO" start
+    wait_for 3 phase_is focus
+    run "$MINDORO" start 40
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"stop it first to change the minutes"* ]]
+    [ "$(state_field focus_minutes)" = 2 ]
+}
+
+@test "start rejects zero, words, and two bare numbers" {
+    run "$MINDORO" start 0
+    [ "$status" -eq 64 ]
+    run "$MINDORO" start forty
+    [ "$status" -eq 64 ]
+    run "$MINDORO" start 25 5
+    [ "$status" -eq 64 ]
+    [[ "$output" == *"one number is the focus"* ]]
+    run "$MINDORO" start --short-break
+    [ "$status" -eq 64 ]
+    [ ! -f "$STATE" ]
+}

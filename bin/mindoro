@@ -6,12 +6,18 @@
 # mechanism; the break is the product.
 #
 # Usage:
-#   mindoro start            begin a focus (starts the daemon)
+#   mindoro start [MINUTES] [--short-break N] [--long-break N] [--cycles N]
+#                            begin a focus; minutes for this session only
 #   mindoro stop             end the session (stops the daemon)
-#   mindoro toggle           start if stopped, stop if running
+#   mindoro toggle [...]     start if stopped, stop if running
 #   mindoro status [--tmux]  the phase and time left, or nothing
 #   mindoro break            the break screen, in this terminal
 #   mindoro daemon           the clock, in the foreground
+#
+# `start 40` is a 40-minute focus; `--focus 40` says the same. The
+# breaks and the cycle count follow the config unless given too. A
+# session's minutes are fixed when it starts and written to the state
+# file; changing them means stopping first.
 #
 # The daemon owns time. It ticks once a second, advances phases on the
 # wall clock, and writes the state file every tick. Everything else —
@@ -50,12 +56,57 @@ source "$MINDORO_HOME/lib/mindoro/notify.sh"
 source "$MINDORO_HOME/lib/mindoro/daemon.sh"
 
 usage() {
-    sed -n '2,15p' "$MINDORO_HOME/bin/mindoro" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$MINDORO_HOME/bin/mindoro" | sed 's/^# \{0,1\}//'
+}
+
+# start_parse reads `start`'s arguments onto cfg_*: a bare number is
+# the focus, flags name the rest. Same rule as the config: positive
+# integers, nothing else. Returns 64 on a bad argument.
+start_parse() {
+    local given=0
+    while (( $# )); do
+        case $1 in
+        --focus | --short-break | --long-break | --cycles)
+            [[ -n "${2:-}" ]] || { echo "mindoro: start: $1 needs a number" >&2; return 64; }
+            start_set "${1#--}" "$2" || return 64
+            shift 2
+            ;;
+        --focus=* | --short-break=* | --long-break=* | --cycles=*)
+            start_set "${1%%=*}" "${1#*=}" || return 64
+            shift
+            ;;
+        [0-9]*)
+            (( given )) && { echo "mindoro: start: one number is the focus; name the rest with --short-break, --long-break, --cycles" >&2; return 64; }
+            start_set focus "$1" || return 64
+            given=1
+            shift
+            ;;
+        *)
+            echo "mindoro: start: unknown argument $1" >&2
+            return 64
+            ;;
+        esac
+    done
+}
+
+start_set() {
+    local key=${1#--} value=$2
+    key=${key//-/_}
+    if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value == 0 )); then
+        echo "mindoro: start: $key must be a positive number of minutes" >&2
+        return 1
+    fi
+    printf -v "cfg_$key" '%s' "$value"
 }
 
 cmd_start() {
     config_load || return $?
+    start_parse "$@" || return $?
     if state_daemon_alive; then
+        if (( $# )); then
+            echo "mindoro: already running ($(state_describe)); stop it first to change the minutes" >&2
+            return 1
+        fi
         echo "mindoro: already running ($(state_describe))" >&2
         return 0
     fi
@@ -98,7 +149,7 @@ cmd_stop() {
 }
 
 cmd_toggle() {
-    if state_daemon_alive; then cmd_stop; else cmd_start; fi
+    if state_daemon_alive; then cmd_stop; else cmd_start "$@"; fi
 }
 
 cmd_status() {
