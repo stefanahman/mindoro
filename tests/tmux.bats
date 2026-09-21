@@ -72,6 +72,27 @@ wait_for() {
     phase_is short_break
 }
 
+@test "stop during a break takes the screen down and returns the client" {
+    "${T[@]}" send-keys -t work "'$ROOT/bin/mindoro' start" Enter
+    wait_for 6 phase_is short_break
+    wait_for 5 client_on mindoro-break
+    "$ROOT/bin/mindoro" stop
+    wait_for 5 no_break_session
+    wait_for 5 client_on work
+    [ ! -f "$STATE" ]
+}
+
+@test "a daemon killed outright takes its adapter with it" {
+    "${T[@]}" send-keys -t work "'$ROOT/bin/mindoro' start" Enter
+    wait_for 5 phase_is focus
+    local daemon adapter
+    daemon=$(state_field pid)
+    wait_for 5 bash -c "pgrep -f '$ROOT/adapters/tmux run' >/dev/null"
+    adapter=$(pgrep -f "$ROOT/adapters/tmux run" | head -1)
+    kill -9 "$daemon"
+    wait_for 5 bash -c "! kill -0 $adapter 2>/dev/null"
+}
+
 @test "the status line shows the countdown through #{mindoro}" {
     "${T[@]}" set-option -g status-right '#{mindoro}'
     "${T[@]}" run-shell "$ROOT/tmux/mindoro.tmux"

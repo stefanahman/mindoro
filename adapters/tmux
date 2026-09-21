@@ -21,16 +21,47 @@ source "$MINDORO_HOME/lib/mindoro/state.sh"
 SESSION=mindoro-break
 SIGNAL=mindoro-break-done
 
+# Where every client was before a takeover, "tty<TAB>session" per
+# line; empty when no takeover is up. Global so a signal can restore
+# them.
+snapshot=''
+wait_pid=0
+guard_pid=0
+
 detect() {
     [[ -n "${TMUX:-}" ]] && return 0
     tmux list-sessions >/dev/null 2>&1
 }
 
+# restore puts every client back where the snapshot says.
+restore() {
+    local tty session
+    while IFS=$'\t' read -r tty session; do
+        [[ -n "$tty" ]] || continue
+        tmux switch-client -c "$tty" -t "$session" 2>/dev/null || true
+    done <<< "$snapshot"
+    snapshot=''
+}
+
+# on_signal: the daemon is stopping (or this adapter is being asked
+# to). A break screen that is up comes down and its clients go back;
+# a stopped session must not leave anyone stranded on it.
+on_signal() {
+    trap - TERM INT HUP
+    (( wait_pid > 0 )) && kill "$wait_pid" 2>/dev/null
+    (( guard_pid > 0 )) && kill "$guard_pid" 2>/dev/null
+    if [[ -n "$snapshot" ]]; then
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+        restore
+    fi
+    exit 0
+}
+trap on_signal TERM INT HUP
+
 takeover() {
     # A second transition while a screen is up is the same screen.
     tmux has-session -t "$SESSION" 2>/dev/null && return 0
 
-    local snapshot
     snapshot=$(tmux list-clients -F '#{client_tty}	#{session_name}' 2>/dev/null)
     [[ -n "$snapshot" ]] || return 0   # nobody attached, nobody to take over
 
@@ -50,7 +81,6 @@ takeover() {
 
     # Block until the screen exits. The 30s guard covers the screen
     # dying before it can signal; the loop's has-session settles it.
-    local wait_pid guard_pid
     while tmux has-session -t "$SESSION" 2>/dev/null; do
         tmux wait-for "$SIGNAL" 2>/dev/null &
         wait_pid=$!
@@ -58,16 +88,19 @@ takeover() {
         guard_pid=$!
         wait "$wait_pid" 2>/dev/null
         kill "$guard_pid" 2>/dev/null
+        wait_pid=0; guard_pid=0
     done
 
-    while IFS=$'\t' read -r tty session; do
-        tmux switch-client -c "$tty" -t "$session" 2>/dev/null || true
-    done <<< "$snapshot"
+    restore
 }
 
+# run watches the state file until the session ends. The daemon's pid
+# is the tie: a file whose daemon is gone — killed outright, so it
+# never cleaned up — is not a session, and this process leaves rather
+# than loop on it forever.
 run() {
     local last=''
-    while state_load; do
+    while state_load && kill -0 "$pid" 2>/dev/null; do
         case "$last:$phase" in
         focus:short_break | focus:long_break | :short_break | :long_break)
             takeover
