@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# adapters/herdr — the break takeover, for herdr.
+#
+# A workspace of its own running the break screen in its root pane,
+# focused the moment a focus ends. herdr closes a workspace when its
+# root process exits, so typing the phrase takes the screen down by
+# itself; the adapter then focuses the workspace you were on.
+#
+# No countdown in the sidebar yet. herdr 0.9.0 lists a
+# `workspace report-metadata` verb for display-only tokens with a
+# TTL, which is exactly the slot — but every argument form its --help
+# suggests answers "missing required --source", and neither the agent
+# skill file nor herdr.dev/llms.txt documents it. Phase changes reach
+# you as herdr notifications (see lib/mindoro/notify.sh); the
+# countdown waits for the verb to work.
+#
+# Verbs, as the daemon calls them:
+#   detect   exit 0 when a herdr server is running
+#   run      watch the state file until the session ends
+set -uo pipefail
+
+# shellcheck source=../lib/mindoro/state.sh
+source "$MINDORO_HOME/lib/mindoro/state.sh"
+
+detect() {
+    command -v herdr >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
+    herdr status server 2>/dev/null | grep -q '^status: running'
+}
+
+workspaces_json() { herdr workspace list 2>/dev/null; }
+focused_id()      { workspaces_json | jq -r '.result.workspaces[] | select(.focused) | .workspace_id' | head -1; }
+workspace_exists() { workspaces_json | jq -e --arg w "$1" '.result.workspaces[] | select(.workspace_id == $w)' >/dev/null 2>&1; }
+
+break_ws=''       # the takeover workspace, while a screen is up
+before_break=''   # where the user was when it went up
+
+takeover() {
+    [[ -n "$break_ws" ]] && return 0
+    before_break=$(focused_id)
+    local out pane
+    out=$(herdr workspace create --cwd "$HOME" --no-focus 2>/dev/null)
+    pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+    [[ -n "$pane" ]] || return 0
+    break_ws=${pane%%:*}
+    # `pane run` is text plus Enter into the root pane's shell, so
+    # `exec`: when the screen exits the shell is gone, and herdr
+    # closes the workspace.
+    herdr pane run "$pane" "exec '$MINDORO_HOME/bin/mindoro' break" >/dev/null 2>&1
+    herdr workspace focus "$break_ws" >/dev/null 2>&1
+    return 0
+}
+
+# takeover_watch: the screen exited (the phrase was typed, or the
+# workspace was closed by hand) — go back to where the user was.
+takeover_watch() {
+    [[ -n "$break_ws" ]] || return 0
+    workspace_exists "$break_ws" && return 0
+    [[ -n "$before_break" ]] && herdr workspace focus "$before_break" >/dev/null 2>&1
+    break_ws=''
+}
+
+on_signal() {
+    trap - TERM INT HUP
+    if [[ -n "$break_ws" ]] && workspace_exists "$break_ws"; then
+        herdr workspace close "$break_ws" >/dev/null 2>&1
+        [[ -n "$before_break" ]] && herdr workspace focus "$before_break" >/dev/null 2>&1
+    fi
+    exit 0
+}
+
+run() {
+    trap on_signal TERM INT HUP
+    local last=''
+    while state_load && kill -0 "$pid" 2>/dev/null; do
+        case "$last:$phase" in
+        focus:short_break | focus:long_break) takeover ;;
+        esac
+        takeover_watch
+        last=$phase
+        sleep 1
+    done
+    on_signal
+}
+
+case ${1:-} in
+detect) detect ;;
+run)    run ;;
+*) echo "usage: adapters/herdr detect|run" >&2; exit 64 ;;
+esac

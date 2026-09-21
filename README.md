@@ -116,13 +116,29 @@ focus that ended while the lid was down didn't happen, so the session
 stops rather than serve a break for work nobody did. A short gap
 inside a phase is just a short absence.
 
-**Adapters.** The daemon knows nothing about tmux or cmux. Each
-multiplexer has an adapter in `adapters/`, a small program with two
-verbs — `detect`, and `run` — that the daemon starts as a child when
-the multiplexer is present. The tmux adapter does the takeover:
-one shared session running the break screen, every attached client
-switched into it, and switched back when the screen exits. Typing the
-phrase in any window is typing into the same screen.
+**Adapters.** The daemon knows nothing about tmux, cmux or herdr.
+Each has an adapter in `adapters/`, a small program with two verbs —
+`detect`, and `run` — that the daemon starts as a child when the
+multiplexer is present. Every adapter that detects runs; a machine
+with all three gets all three.
+
+- **tmux** — the takeover is one shared session running the break
+  screen, every attached client switched into it and switched back
+  when the screen exits. Typing the phrase in any window is typing
+  into the same screen. The countdown is `#{mindoro}` in the status
+  line.
+- **cmux** — the countdown is a sidebar pill on the selected
+  workspace, following your selection through cmux's event stream.
+  The takeover is a workspace of its own that closes when the phrase
+  is typed, and the one you were on comes back. A daemon started
+  inside a cmux surface finds the socket by itself; started elsewhere,
+  it reads `cmux_socket` from the config, then tries the paths the
+  stable and nightly builds use.
+- **herdr** — the takeover is a workspace of its own, focused for the
+  break and closed by the phrase, with your previous workspace focused
+  again. Phase changes are herdr notifications. No countdown in the
+  sidebar yet: herdr 0.9.0's `report-metadata` verb rejects every
+  argument form its help suggests.
 
 ## Configure
 
@@ -136,6 +152,7 @@ cycles = 4          # focuses per long break
 wake_gap = 5        # seconds without a tick that count as sleep
 phrases = ~/.config/mindoro/phrases
 prompts = ~/.config/mindoro/prompts
+cmux_socket = /tmp/cmux-nightly.sock   # for a daemon started outside a cmux surface
 ```
 
 `phrases` is one phrase per line. `prompts` is a directory, one file

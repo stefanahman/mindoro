@@ -17,11 +17,15 @@ setup() {
     STATE=$MINDORO_STATE
 
     # A session whose shell carries the test environment, so a daemon
-    # started from inside it inherits TMUX and finds this server.
+    # started from inside it inherits TMUX and finds this server. The
+    # shell is /bin/sh, not the login shell: keys sent while a login
+    # shell is still running its rc files can be lost, and under load
+    # that window is wide enough to lose `mindoro start`.
     "${T[@]}" new-session -d -s work -x 120 -y 40 \
         -e "PATH=$ROOT/bin:$PATH" \
         -e "MINDORO_STATE=$MINDORO_STATE" -e "MINDORO_CONFIG=$MINDORO_CONFIG" \
-        -e MINDORO_MINUTE=1 -e MINDORO_NOTIFY=stderr
+        -e MINDORO_MINUTE=1 -e MINDORO_NOTIFY=stderr \
+        /bin/sh
     "${T[@]}" set-option -g status-interval 1
     python3 "$ROOT/tests/helpers/hold-client.py" "$SOCK" work >/dev/null 2>&1 3>&- &
     CLIENT=$!

@@ -4,7 +4,7 @@ LIB    ?= $(PREFIX)/lib/mindoro
 LIBEXEC ?= $(PREFIX)/libexec/mindoro
 SHARE  ?= $(PREFIX)/share/mindoro
 
-SCRIPTS = bin/mindoro libexec/mindoro-break adapters/tmux mindoro.tmux
+SCRIPTS = bin/mindoro libexec/mindoro-break adapters/tmux adapters/cmux adapters/herdr mindoro.tmux
 LIBS    = $(wildcard lib/mindoro/*.sh)
 
 .PHONY: lint test check install uninstall

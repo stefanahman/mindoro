@@ -13,6 +13,8 @@
 #   phrases = <path>    one phrase per line; typing one ends a break
 #   prompts = <dir>     one file per prompt: first line the message,
 #                       the rest the art
+#   cmux_socket = <path>  the cmux socket, for a daemon started outside
+#                       a cmux surface (CMUX_SOCKET_PATH wins when set)
 
 MINDORO_CONFIG=${MINDORO_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/mindoro/config}
 
@@ -24,6 +26,7 @@ config_load() {
     cfg_wake_gap=5
     cfg_phrases=$MINDORO_HOME/share/mindoro/phrases
     cfg_prompts=$MINDORO_HOME/share/mindoro/prompts
+    cfg_cmux_socket=''
 
     [[ -f "$MINDORO_CONFIG" ]] || return 0
 
@@ -43,7 +46,7 @@ config_load() {
             config_int "$key" "$value" "$MINDORO_CONFIG:$n" || return 65
             value=$int_value
             ;;
-        phrases | prompts)
+        phrases | prompts | cmux_socket)
             value=${value/#\~/$HOME}
             ;;
         *)

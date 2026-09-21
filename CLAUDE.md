@@ -18,6 +18,20 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
 - `adapters/<multiplexer>` — `detect` and `run`. Started by the daemon
   as children when their multiplexer is present. Each reads the state
   file and does the showing and the takeover for its multiplexer.
+  - `tmux`: takeover by switching every client into one shared
+    session; the countdown is `#{mindoro}` via `mindoro tmux-init`.
+  - `cmux`: a sidebar pill (`set-status`) on the selected workspace,
+    following `cmux events --name workspace.selected`; takeover is a
+    workspace created with `--command "exec … break"` and `--focus true`,
+    which closes itself when the screen exits (`--command` is typed
+    text, so `exec` is what makes that true). `MINDORO_TAKEOVER_FOCUS=false`
+    is for a live test: the workspace is made and watched, nobody's
+    screen moves.
+  - `herdr`: takeover is `workspace create` + `pane run "exec … break"`
+    + `workspace focus`; herdr closes the workspace when the root
+    process exits. No pill: `workspace report-metadata` in 0.9.0
+    rejects every argument form its help suggests, and it is documented
+    nowhere — re-check on a newer herdr.
 - `share/mindoro/` — default phrases and prompts, overridable through
   the config.
 - `mindoro tmux-init` — wires tmux: `#{mindoro}` in the status line

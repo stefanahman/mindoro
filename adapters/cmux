@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# adapters/cmux — the countdown pill and the break takeover, for cmux.
+#
+# The pill: a sidebar status entry, `[F 24:59]` in the phase's colour,
+# on whichever workspace is selected — cmux's pills are per workspace,
+# so the adapter follows the selection through the event stream and
+# moves the pill along. The takeover: a workspace of its own running
+# the break screen, selected the moment a focus ends; when the screen
+# exits the workspace closes itself and the one you were on comes
+# back.
+#
+# The socket: CMUX_SOCKET_PATH when the daemon was started inside a
+# cmux surface, the config's `cmux_socket` otherwise, then the two
+# paths the stable and nightly builds use. A named socket that does
+# not answer is a no, not a reason to try the others.
+#
+# Verbs, as the daemon calls them:
+#   detect   exit 0 when a cmux answers
+#   run      watch the state file until the session ends
+set -uo pipefail
+
+# shellcheck source=../lib/mindoro/config.sh
+source "$MINDORO_HOME/lib/mindoro/config.sh"
+# shellcheck source=../lib/mindoro/state.sh
+source "$MINDORO_HOME/lib/mindoro/state.sh"
+config_load >/dev/null 2>&1 || true   # only cfg_cmux_socket matters here
+export CMUX_QUIET=1
+
+PILL=mindoro
+BREAK_TITLE='mindoro break'
+
+resolve_socket() {
+    local named=${CMUX_SOCKET_PATH:-} s
+    if [[ -n "$named" ]]; then
+        [[ -S "$named" ]] && cmux ping >/dev/null 2>&1
+        return
+    fi
+    for s in "${cfg_cmux_socket:-}" /tmp/cmux-nightly.sock "$HOME/.local/state/cmux/cmux.sock"; do
+        [[ -n "$s" && -S "$s" ]] || continue
+        if CMUX_SOCKET_PATH=$s cmux ping >/dev/null 2>&1; then
+            export CMUX_SOCKET_PATH=$s
+            return 0
+        fi
+    done
+    return 1
+}
+
+detect() {
+    command -v cmux >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && resolve_socket
+}
+
+workspaces_json() { cmux --json workspace list 2>/dev/null; }
+selected_id()     { workspaces_json | jq -r '.workspaces[] | select(.selected) | .id' | head -1; }
+workspace_exists() { workspaces_json | jq -e --arg id "$1" '.workspaces[] | select(.id == $id)' >/dev/null 2>&1; }
+
+sel=''            # the workspace the user is on
+pill_on=''        # the workspace carrying the pill
+break_ws=''       # the takeover workspace, while a screen is up
+before_break=''   # where the user was when it went up
+events_pid=0
+events_file=''
+
+# The selection, from cmux's own event stream: one line per change,
+# read at each tick. Nothing to poll while nothing changes.
+events_start() {
+    events_file=$(mktemp "${TMPDIR:-/tmp}/mindoro-cmux.XXXXXX") || return 1
+    cmux events --name workspace.selected --no-ack --no-heartbeat --reconnect > "$events_file" 2>/dev/null &
+    events_pid=$!
+    sel=$(selected_id)
+}
+
+events_refresh() {
+    local id=''
+    [[ -s "$events_file" ]] && id=$(tail -n 1 "$events_file" | jq -r '.workspace_id // empty' 2>/dev/null)
+    [[ -n "$id" ]] && sel=$id
+    return 0
+}
+
+pill_show() {
+    local remaining=$(( ends - $(now_epoch) )) icon color text
+    (( remaining < 0 )) && remaining=0
+    case $phase in
+    focus)       icon=F; color='#e2b072' ;;
+    short_break) icon=b; color='#98c379' ;;
+    long_break)  icon=B; color='#61afef' ;;
+    esac
+    text=$(printf '%s %02d:%02d' "$icon" $(( remaining / 60 )) $(( remaining % 60 )))
+    # Never put the pill on the break workspace itself.
+    local target=$sel
+    [[ -n "$break_ws" && "$target" == "$break_ws" ]] && target=$before_break
+    [[ -n "$target" ]] || return 0
+    if [[ "$target" != "$pill_on" ]]; then
+        [[ -n "$pill_on" ]] && cmux clear-status "$PILL" --workspace "$pill_on" >/dev/null 2>&1
+        pill_on=$target
+    fi
+    cmux set-status "$PILL" "$text" --icon timer --color "$color" --priority 90 --workspace "$pill_on" >/dev/null 2>&1
+}
+
+pill_clear() {
+    [[ -n "$pill_on" ]] && cmux clear-status "$PILL" --workspace "$pill_on" >/dev/null 2>&1
+    pill_on=''
+}
+
+takeover() {
+    [[ -n "$break_ws" ]] && return 0
+    before_break=$sel
+    # `--command` is typed into the new workspace's shell, so `exec`:
+    # when the screen exits, the shell is gone and the workspace with it.
+    # MINDORO_TAKEOVER_FOCUS=false is for a test run under a live
+    # cmux: the workspace is made and watched, nobody's screen moves.
+    local out
+    out=$(cmux --json --id-format both workspace create --name "$BREAK_TITLE" \
+        --command "exec '$MINDORO_HOME/bin/mindoro' break" \
+        --focus "${MINDORO_TAKEOVER_FOCUS:-true}" 2>/dev/null)
+    break_ws=$(printf '%s' "$out" | jq -r '.workspace_id // empty' 2>/dev/null)
+    [[ -n "$break_ws" ]] || break_ws=$(workspaces_json | jq -r --arg t "$BREAK_TITLE" '.workspaces[] | select(.title == $t) | .id' | head -1)
+    if [[ -n "$break_ws" && "${MINDORO_TAKEOVER_FOCUS:-true}" == true ]]; then
+        cmux workspace select "$break_ws" >/dev/null 2>&1
+    fi
+    return 0
+}
+
+# takeover_watch: the screen exited (the phrase was typed, or the
+# workspace was closed by hand) — go back to where the user was.
+takeover_watch() {
+    [[ -n "$break_ws" ]] || return 0
+    workspace_exists "$break_ws" && return 0
+    [[ -n "$before_break" ]] && cmux workspace select "$before_break" >/dev/null 2>&1
+    break_ws=''
+}
+
+on_signal() {
+    trap - TERM INT HUP
+    if [[ -n "$break_ws" ]] && workspace_exists "$break_ws"; then
+        cmux workspace close "$break_ws" >/dev/null 2>&1
+        [[ -n "$before_break" ]] && cmux workspace select "$before_break" >/dev/null 2>&1
+    fi
+    pill_clear
+    (( events_pid > 0 )) && kill "$events_pid" 2>/dev/null
+    [[ -n "$events_file" ]] && rm -f "$events_file"
+    exit 0
+}
+
+run() {
+    resolve_socket || exit 1
+    trap on_signal TERM INT HUP
+    events_start
+    local last=''
+    while state_load && kill -0 "$pid" 2>/dev/null; do
+        events_refresh
+        case "$last:$phase" in
+        focus:short_break | focus:long_break) takeover ;;
+        esac
+        takeover_watch
+        pill_show
+        last=$phase
+        sleep 1
+    done
+    on_signal
+}
+
+case ${1:-} in
+detect) detect ;;
+run)    run ;;
+*) echo "usage: adapters/cmux detect|run" >&2; exit 64 ;;
+esac
