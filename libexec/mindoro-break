@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# mindoro-break — the break screen. Full-screen, one prompt, and the
+# only way out is to type the phrase.
+#
+# Runs as the only process in whatever terminal the adapter gives it:
+# a shared tmux session every client is switched into, a cmux
+# workspace, a plain terminal for `mindoro break`. When the phrase is
+# typed it exits, and whoever launched it takes it from there. It
+# knows nothing about multiplexers.
+#
+# Content comes from the config's `prompts` directory (one file per
+# prompt: the first line is the message, the rest is the art) and
+# `phrases` file (one phrase per line), both with defaults in
+# share/mindoro/. A star field twinkles around the content; the
+# countdown of the break shows at the top while a session runs.
+set -uo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "mindoro: bash 4 or newer is required (this is $BASH_VERSION)" >&2
+    exit 1
+fi
+
+if [[ -z "${MINDORO_HOME:-}" ]]; then
+    _self=${BASH_SOURCE[0]}
+    while [[ -L "$_self" ]]; do
+        _link=$(readlink "$_self")
+        case $_link in /*) _self=$_link ;; *) _self=$(dirname "$_self")/$_link ;; esac
+    done
+    MINDORO_HOME=$(cd "$(dirname "$_self")/.." && pwd -P)
+    unset _self _link
+fi
+# shellcheck source=../lib/mindoro/config.sh
+source "$MINDORO_HOME/lib/mindoro/config.sh"
+# shellcheck source=../lib/mindoro/state.sh
+source "$MINDORO_HOME/lib/mindoro/state.sh"
+config_load || exit $?
+
+# --- Content ----------------------------------------------------------
+mapfile -t phrases < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' "$cfg_phrases" 2>/dev/null)
+if (( ${#phrases[@]} == 0 )); then
+    echo "mindoro: no phrases in $cfg_phrases" >&2
+    exit 65
+fi
+prompt_files=("$cfg_prompts"/*.txt)
+if [[ ! -e "${prompt_files[0]}" ]]; then
+    echo "mindoro: no prompts in $cfg_prompts" >&2
+    exit 65
+fi
+
+phrase=${phrases[$(( RANDOM % ${#phrases[@]} ))]}
+prompt_file=${prompt_files[$(( RANDOM % ${#prompt_files[@]} ))]}
+mapfile -t prompt_lines < "$prompt_file"
+msg=${prompt_lines[0]}
+art_lines=("${prompt_lines[@]:1}")
+
+header_line='Or check yourself:'
+list_lines=(
+    'body       ·  water   ·  snack       ·  bathroom  ·  move'
+    'relax      ·  breath  ·  shoulders   ·  jaw       ·  eyes  ·  sky'
+    'social     ·  send someone a message'
+    'cognitive  ·  offload one sentence   ·  look at something real'
+)
+prompt_line="Type to close:  \"$phrase\""
+input_hint='> '
+
+# --- Static widths / heights ------------------------------------------
+art_w=0
+for line in "${art_lines[@]}"; do (( ${#line} > art_w )) && art_w=${#line}; done
+list_w=0
+for line in "${list_lines[@]}"; do (( ${#line} > list_w )) && list_w=${#line}; done
+block_h=$(( ${#art_lines[@]} + 1 + 1 + 1 + 1 + 1 + ${#list_lines[@]} + 1 + 1 + 1 + 1 ))
+block_w=$art_w
+(( list_w > block_w )) && block_w=$list_w
+(( ${#msg} > block_w )) && block_w=${#msg}
+(( ${#header_line} > block_w )) && block_w=${#header_line}
+(( ${#prompt_line} > block_w )) && block_w=${#prompt_line}
+# Room on the input row so typing never meets a star.
+input_reserve=$(( ${#input_hint} + ${#phrase} + 10 ))
+(( input_reserve > block_w )) && block_w=$input_reserve
+
+typed=''
+timer_line=''
+
+# read_timer sets timer_line to the break's countdown, or to nothing:
+# the screen also runs on its own, with no session behind it.
+read_timer() {
+    timer_line=''
+    state_load || return 0
+    local remaining=$(( ends - $(now_epoch) ))
+    (( remaining < 0 )) && return 0
+    local icon color
+    case $phase in
+    short_break) icon=b; color='\e[38;2;152;195;121m' ;;
+    long_break)  icon=B; color='\e[38;2;97;175;239m' ;;
+    *) return 0 ;;
+    esac
+    timer_line=$(printf '%b[%s %02d:%02d]\e[0m' "$color" "$icon" $(( remaining / 60 )) $(( remaining % 60 )))
+    return 0
+}
+
+# --- Geometry, recomputed each frame for a client that resized -------
+lines=24; cols=80
+art_col=1; list_col=1; input_col=1; block_top=0; block_left=0; input_row=0
+
+compute_layout() {
+    local size
+    if size=$(stty size 2>/dev/null) && [[ -n "$size" ]]; then
+        lines=${size%% *}
+        cols=${size##* }
+    fi
+    art_col=$(( (cols - art_w) / 2 + 1 ));      (( art_col < 1 )) && art_col=1
+    list_col=$(( (cols - list_w) / 2 + 1 ));    (( list_col < 1 )) && list_col=1
+    input_col=$(( (cols - input_reserve) / 2 + 1 )); (( input_col < 1 )) && input_col=1
+    block_top=$(( (lines - block_h) / 2 ));     (( block_top < 0 )) && block_top=0
+    block_left=$(( (cols - block_w) / 2 ));     (( block_left < 0 )) && block_left=0
+    return 0
+}
+
+# --- ANSI -------------------------------------------------------------
+esc() { printf '\e[%s' "$1"; }
+move() { printf '\e[%d;%dH' "$1" "$2"; }
+hide_cursor() { esc '?25l'; }
+show_cursor() { esc '?25h'; }
+clear_screen() { esc '2J'; esc 'H'; }
+
+draw_center_line() {
+    local text=$1 row=$2 col
+    col=$(( (cols - ${#text}) / 2 + 1 ))
+    (( col < 1 )) && col=1
+    move "$row" "$col"
+    printf '%s' "$text"
+}
+
+draw_content() {
+    local row line
+    if [[ -n "$timer_line" ]]; then
+        # "[X 00:00]" is nine cells wide; the colour codes are not.
+        move 2 $(( (cols - 9) / 2 + 1 ))
+        printf '%b' "$timer_line"
+    fi
+    row=$block_top
+    for line in "${art_lines[@]}"; do
+        row=$(( row + 1 )); move "$row" "$art_col"; printf '%s' "$line"
+    done
+    row=$(( row + 2 )); draw_center_line "$msg" "$row"
+    row=$(( row + 2 )); draw_center_line "$header_line" "$row"
+    row=$(( row + 1 ))
+    for line in "${list_lines[@]}"; do
+        row=$(( row + 1 )); move "$row" "$list_col"; printf '%s' "$line"
+    done
+    row=$(( row + 2 )); draw_center_line "$prompt_line" "$row"
+    input_row=$(( row + 2 ))
+}
+
+draw_input() {
+    move "$input_row" "$input_col"
+    printf '%*s' "$input_reserve" ''
+    move "$input_row" "$input_col"
+    printf '%s%s' "$input_hint" "$typed"
+}
+
+# --- Star field -------------------------------------------------------
+star_chars=('.' ',' "'" '`' '*' '.' '.' '.')
+in_block_region() {
+    local r=$1 c=$2
+    (( r >= block_top && r < block_top + block_h )) || return 1
+    (( c >= block_left - 2 && c < block_left + block_w + 2 )) || return 1
+    return 0
+}
+
+draw_stars() {
+    local n=$1 i row col ch
+    for (( i = 0; i < n; i++ )); do
+        row=$(( RANDOM % lines + 1 ))
+        col=$(( RANDOM % cols + 1 ))
+        in_block_region "$row" "$col" && continue
+        ch=${star_chars[$(( RANDOM % ${#star_chars[@]} ))]}
+        move "$row" "$col"
+        printf '%s' "$ch"
+    done
+}
+
+# --- Main loop --------------------------------------------------------
+cleanup() {
+    show_cursor
+    clear_screen
+    stty sane 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+hide_cursor
+# Non-canonical, no-echo, for the whole loop: bash's `read -n 1`
+# toggles the same termios bits per call, and pre-setting them closes
+# the gap between calls where a keystroke could land in a line buffer.
+stty -icanon -echo min 1 time 0 2>/dev/null || true
+
+compute_layout
+read_timer
+clear_screen
+draw_content
+draw_input
+
+density() {
+    local d=$(( (lines * cols) / 400 ))
+    (( d < 4 )) && d=4
+    (( d > 30 )) && d=30
+    echo "$d"
+}
+
+target=${phrase,,}
+
+while true; do
+    # One character at a time, 400ms at most, so the stars can move.
+    # IFS= keeps a space; -d '' keeps Enter as a character.
+    if IFS= read -t 0.4 -n 1 -s -r -d '' ch; then
+        case "$ch" in
+        $'\r' | $'\n')
+            [[ "${typed,,}" == "$target" ]] && break
+            typed=''
+            ;;
+        $'\x7f' | $'\b') typed=${typed%?} ;;
+        [[:print:]]) typed+=$ch ;;
+        esac
+    fi
+    compute_layout
+    read_timer
+    clear_screen
+    draw_content
+    draw_stars "$(density)"
+    draw_input
+done

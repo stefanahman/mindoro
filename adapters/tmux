@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# adapters/tmux — the break takeover, for tmux.
+#
+# tmux needs no help showing the timer: `#{mindoro}` in the status
+# line runs `mindoro status --tmux`, which reads the state file. What
+# tmux cannot do by itself is the break. This adapter watches the
+# state file and, the moment a focus becomes a break, takes every
+# attached client into one shared session running the break screen —
+# one pane, so typing the phrase in any window is typing into the same
+# screen — and returns each client to where it was when the screen
+# exits.
+#
+# Verbs, as the daemon calls them:
+#   detect   exit 0 when a tmux server is reachable from here
+#   run      watch the state file until it goes away
+set -uo pipefail
+
+# shellcheck source=../lib/mindoro/state.sh
+source "$MINDORO_HOME/lib/mindoro/state.sh"
+
+SESSION=mindoro-break
+SIGNAL=mindoro-break-done
+
+detect() {
+    [[ -n "${TMUX:-}" ]] && return 0
+    tmux list-sessions >/dev/null 2>&1
+}
+
+takeover() {
+    # A second transition while a screen is up is the same screen.
+    tmux has-session -t "$SESSION" 2>/dev/null && return 0
+
+    local snapshot
+    snapshot=$(tmux list-clients -F '#{client_tty}	#{session_name}' 2>/dev/null)
+    [[ -n "$snapshot" ]] || return 0   # nobody attached, nobody to take over
+
+    # The screen, then a wait-for signal so this process wakes without
+    # polling when it ends. The screen itself knows nothing of tmux.
+    tmux new-session -d -s "$SESSION" -n break \
+        "\"$MINDORO_HOME/bin/mindoro\" break; tmux wait-for -S $SIGNAL"
+    tmux set-option -t "$SESSION" status off 2>/dev/null || true
+    # When the session dies, switch each client back rather than
+    # detaching it — a detached client is a closed terminal window.
+    tmux set-option -t "$SESSION" detach-on-destroy off 2>/dev/null || true
+
+    local tty session
+    while IFS=$'\t' read -r tty session; do
+        tmux switch-client -c "$tty" -t "$SESSION" 2>/dev/null || true
+    done <<< "$snapshot"
+
+    # Block until the screen exits. The 30s guard covers the screen
+    # dying before it can signal; the loop's has-session settles it.
+    local wait_pid guard_pid
+    while tmux has-session -t "$SESSION" 2>/dev/null; do
+        tmux wait-for "$SIGNAL" 2>/dev/null &
+        wait_pid=$!
+        ( sleep 30; kill "$wait_pid" 2>/dev/null ) &
+        guard_pid=$!
+        wait "$wait_pid" 2>/dev/null
+        kill "$guard_pid" 2>/dev/null
+    done
+
+    while IFS=$'\t' read -r tty session; do
+        tmux switch-client -c "$tty" -t "$session" 2>/dev/null || true
+    done <<< "$snapshot"
+}
+
+run() {
+    local last=''
+    while state_load; do
+        case "$last:$phase" in
+        focus:short_break | focus:long_break | :short_break | :long_break)
+            takeover
+            ;;
+        esac
+        last=$phase
+        sleep 1
+    done
+}
+
+case ${1:-} in
+detect) detect ;;
+run)    run ;;
+*) echo "usage: adapters/tmux detect|run" >&2; exit 64 ;;
+esac
