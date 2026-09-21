@@ -60,7 +60,8 @@ takeover_watch() {
 }
 
 on_signal() {
-    trap - TERM INT HUP
+    # Ignore, don't reset: a second signal must not cut this short.
+    trap '' TERM INT HUP
     if [[ -n "$break_ws" ]] && workspace_exists "$break_ws"; then
         herdr workspace close "$break_ws" >/dev/null 2>&1
         [[ -n "$before_break" ]] && herdr workspace focus "$before_break" >/dev/null 2>&1
@@ -77,7 +78,7 @@ run() {
         esac
         takeover_watch
         last=$phase
-        sleep 1
+        sleep 1 & wait $!    # interruptible: a trap runs at once
     done
     on_signal
 }

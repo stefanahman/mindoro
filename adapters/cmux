@@ -130,7 +130,11 @@ takeover_watch() {
 }
 
 on_signal() {
-    trap - TERM INT HUP
+    # Ignore, don't reset: a second signal during these calls — the
+    # daemon's TERM and a HUP from a closing terminal can arrive
+    # within the same hundred milliseconds — must not cut the cleanup
+    # short and leave the break workspace behind.
+    trap '' TERM INT HUP
     if [[ -n "$break_ws" ]] && workspace_exists "$break_ws"; then
         cmux workspace close "$break_ws" >/dev/null 2>&1
         [[ -n "$before_break" ]] && cmux workspace select "$before_break" >/dev/null 2>&1
@@ -154,7 +158,9 @@ run() {
         takeover_watch
         pill_show
         last=$phase
-        sleep 1
+        # A backgrounded sleep: bash runs a trap the moment `wait` is
+        # interrupted, where a foreground sleep would finish first.
+        sleep 1 & wait $!
     done
     on_signal
 }

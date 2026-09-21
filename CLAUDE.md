@@ -62,6 +62,17 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
   (`daemon_spawn`). A held descriptor is a `start` that never returns
   under a test runner.
 - A pid left for the daemon to fill in is empty, never `0`.
+- A cleanup handler ignores further signals (`trap '' TERM INT HUP`),
+  never resets them to default: the daemon's TERM to an adapter and a
+  HUP from a closing terminal can land within the same hundred
+  milliseconds, and a default disposition then kills the adapter
+  mid-cleanup with the break workspace left behind — measured, five
+  leaks in about ten runs. Loops sleep with `sleep 1 & wait $!` so a
+  trap runs at once, and `stop` waits up to three seconds for the
+  state file to go, which is the daemon and its adapters being done.
+- The test suite never touches the developer's own multiplexers:
+  tmux.bats runs a private tmux server and passes `MINDORO_ADAPTERS`
+  with only the tmux adapter; core.bats passes an empty directory.
 
 ## Done means
 

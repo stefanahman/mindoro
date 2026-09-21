@@ -46,7 +46,11 @@ daemon_run() {
 
     local now gap
     while true; do
-        sleep 1
+        # A backgrounded sleep: bash runs a trap the moment `wait` is
+        # interrupted, so `stop` acts at once instead of up to a
+        # second later — and the adapters' cleanups start while the
+        # caller is still waiting for the state file to go.
+        sleep 1 & wait $!
         state_load || { daemon_log "state gone: stopped"; return 0; }
         (( pid == $$ )) || { daemon_log "another daemon owns the state: leaving"; trap - EXIT; return 0; }
         now=$(now_epoch)
@@ -93,6 +97,10 @@ daemon_transition() {
 }
 
 daemon_cleanup() {
+    # A second TERM while the adapters are being stopped and waited
+    # for must not cut this short; the state file and the adapters'
+    # own cleanups depend on it finishing.
+    trap '' TERM INT HUP
     adapters_stop
     state_clear
     daemon_log "session ended"

@@ -146,10 +146,12 @@ cmd_stop() {
     local pid
     pid=$(state_get pid)
     kill -TERM "$pid" 2>/dev/null || true
-    # The daemon clears the state on its way out; wait for it briefly
-    # so `stop` followed by `status` reads a settled file system.
+    # The daemon clears the state on its way out, after its adapters
+    # have finished their own cleanups — a break screen taken down, a
+    # pill cleared. Wait for that, so `stop` returning means done, not
+    # begun; the budget covers a slow multiplexer call or two.
     local _
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in $(seq 30); do
         state_exists || break
         sleep 0.1
     done

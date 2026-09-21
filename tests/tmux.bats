@@ -15,6 +15,12 @@ setup() {
     export MINDORO_CONFIG="$BATS_TEST_TMPDIR/config"
     printf 'focus = 2\nshort_break = 4\nlong_break = 4\ncycles = 4\n' > "$MINDORO_CONFIG"
     STATE=$MINDORO_STATE
+    # Only the tmux adapter. The daemon starts every adapter that
+    # detects, and on a machine running cmux or herdr that means real
+    # break workspaces in the developer's own multiplexer.
+    export MINDORO_ADAPTERS="$BATS_TEST_TMPDIR/adapters"
+    mkdir -p "$MINDORO_ADAPTERS"
+    ln -s "$ROOT/adapters/tmux" "$MINDORO_ADAPTERS/tmux"
 
     # A session whose shell carries the test environment, so a daemon
     # started from inside it inherits TMUX and finds this server. The
@@ -24,6 +30,7 @@ setup() {
     "${T[@]}" new-session -d -s work -x 120 -y 40 \
         -e "PATH=$ROOT/bin:$PATH" \
         -e "MINDORO_STATE=$MINDORO_STATE" -e "MINDORO_CONFIG=$MINDORO_CONFIG" \
+        -e "MINDORO_ADAPTERS=$MINDORO_ADAPTERS" \
         -e MINDORO_MINUTE=1 -e MINDORO_NOTIFY=stderr \
         /bin/sh
     "${T[@]}" set-option -g status-interval 1
@@ -91,8 +98,9 @@ wait_for() {
     wait_for 5 phase_is focus
     local daemon adapter
     daemon=$(state_field pid)
-    wait_for 5 bash -c "pgrep -f '$ROOT/adapters/tmux run' >/dev/null"
-    adapter=$(pgrep -f "$ROOT/adapters/tmux run" | head -1)
+    # The daemon starts it through this test's own adapters dir.
+    wait_for 5 bash -c "pgrep -f '$MINDORO_ADAPTERS/tmux run' >/dev/null"
+    adapter=$(pgrep -f "$MINDORO_ADAPTERS/tmux run" | head -1)
     kill -9 "$daemon"
     wait_for 5 bash -c "! kill -0 $adapter 2>/dev/null"
 }
