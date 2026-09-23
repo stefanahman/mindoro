@@ -43,6 +43,15 @@ source "$MINDORO_HOME/lib/mindoro/config.sh"
 source "$MINDORO_HOME/lib/mindoro/state.sh"
 config_load || exit $?
 
+# A screen needs a terminal. Without one there is nothing to draw on
+# and nobody to type the phrase, and a read loop with no terminal
+# returns EOF instantly, forever — a process at 28% CPU for two days,
+# once. Refuse up front, and leave the moment the terminal goes.
+if [[ ! -t 0 ]]; then
+    echo "mindoro: break: stdin is not a terminal" >&2
+    exit 1
+fi
+
 # --- Content ----------------------------------------------------------
 mapfile -t phrases < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' "$cfg_phrases" 2>/dev/null)
 if (( ${#phrases[@]} == 0 )); then
@@ -311,6 +320,10 @@ while true; do
         $'\x7f' | $'\b') typed=${typed%?} ;;
         [[:print:]]) typed+=$ch ;;
         esac
+    elif rc=$?; (( rc < 128 )); then
+        # Not a timeout (those are >128): the terminal is gone and
+        # read hit EOF. Leave, or this loop spins at full speed.
+        break
     fi
     compute_layout
     read_timer

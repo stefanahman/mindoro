@@ -8,7 +8,10 @@ setup() {
     command -v python3 >/dev/null || skip "python3 is needed to hold a client"
     ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
     SOCK="mindoro-test-$$"
-    T=(tmux -L "$SOCK")
+    # -f /dev/null: a private server still reads ~/.config/tmux/tmux.conf,
+    # and a developer's status line runs programs — one of them started
+    # a caffeinate that outlived the tests by two days.
+    T=(tmux -L "$SOCK" -f /dev/null)
     # Named directly, not through XDG_*: a login shell's rc files may
     # export those and would override what the pane is given.
     export MINDORO_STATE="$BATS_TEST_TMPDIR/state/mindoro/state"

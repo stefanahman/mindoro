@@ -27,7 +27,7 @@ setup() {
 @test "tmux says yes inside a session and no with none reachable" {
     command -v tmux >/dev/null || skip "tmux is not installed"
     local sock="mindoro-detect-$$"
-    tmux -L "$sock" new-session -d -s probe
+    tmux -L "$sock" -f /dev/null new-session -d -s probe    # never the developer's tmux.conf
     local path
     path=$(tmux -L "$sock" display-message -p '#{socket_path}')
     run env TMUX="$path,0,0" bash "$ROOT/adapters/tmux" detect

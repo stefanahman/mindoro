@@ -73,6 +73,17 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
 - The test suite never touches the developer's own multiplexers:
   tmux.bats runs a private tmux server and passes `MINDORO_ADAPTERS`
   with only the tmux adapter; core.bats passes an empty directory.
+- Every private tmux server is started with `-f /dev/null`. A `-L`
+  server still reads `~/.config/tmux/tmux.conf`, and a developer's
+  status line runs programs every two seconds while a client is
+  attached — one such program started a `caffeinate` that held the
+  machine awake for two days after the tests ended.
+- The break screen refuses to start without a terminal on stdin and
+  leaves when `read` hits EOF. A screen whose terminal has gone has
+  nothing to draw on and nobody to type the phrase, and a loop that
+  reads EOF forever runs at full speed — the old script did, for two
+  days, after a test harness lost it. Any harness that gives the
+  screen a pseudo-terminal must reap it: kill, then waitpid.
 
 ## Done means
 

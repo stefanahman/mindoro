@@ -78,6 +78,46 @@ probe() {
     [ "${P[prompt]}" = yes ]
 }
 
+@test "without a terminal it refuses at once instead of spinning" {
+    run timeout 5 bash "$ROOT/libexec/mindoro-break" < /dev/null
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not a terminal"* ]]
+}
+
+@test "when its terminal goes away it exits, even with HUP ignored" {
+    # HUP ignored is the case a trap cannot save: only the read loop
+    # noticing EOF can end the process. The old screen looped here at
+    # 28% CPU for two days.
+    run timeout 20 python3 - "$ROOT/libexec/mindoro-break" <<'PY'
+import os, pty, sys, time, select, fcntl, termios, struct, signal
+script = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    os.environ["TERM"] = "xterm-256color"
+    os.execvp("bash", ["bash", script])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+os.set_blocking(fd, False)
+t0 = time.time()
+while time.time() - t0 < 1.5:
+    r, _, _ = select.select([fd], [], [], 0.1)
+    if r:
+        try: os.read(fd, 65536)
+        except (BlockingIOError, OSError): pass
+os.close(fd)
+deadline = time.time() + 5
+while time.time() < deadline:
+    done, _ = os.waitpid(pid, os.WNOHANG)
+    if done:
+        print("exited"); sys.exit(0)
+    time.sleep(0.1)
+os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
+print("still running after 5s"); sys.exit(1)
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *exited* ]]
+}
+
 @test "a resize between frames redraws everything once" {
     # The probe cannot resize mid-run; the layout key covers it in
     # code review terms: compute_layout runs every frame and a
