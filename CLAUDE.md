@@ -94,4 +94,4 @@ go only when the phrase is typed. Bash 4, no other runtime. Read
   rc may export `XDG_*` and override what a pane is given.
 - Commits: conventional, `type: description`, smallest coherent units.
   No AI attribution lines.
-- `README.md` in step with behaviour; `VERSION` bumped at a release.
+- `README.md` and `docs/` in step with behaviour; `VERSION` bumped at a release.
